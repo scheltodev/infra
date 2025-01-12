@@ -1,3 +1,4 @@
+# PersistentVolumeClaim für die Registry
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -10,6 +11,42 @@ spec:
     requests:
       storage: 5Gi
 ---
+# ServiceAccount für die Registry
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: registry-sa
+  namespace: registry
+---
+# Rollen und Bindungen für das Schreiben auf das PVC
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: registry
+  name: registry-role
+rules:
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims", "persistentvolumes"]
+    verbs: ["get", "list", "watch", "create", "delete", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: registry-rolebinding
+  namespace: registry
+subjects:
+  - kind: ServiceAccount
+    name: registry-sa
+    namespace: registry
+roleRef:
+  kind: Role
+  name: registry-role
+  apiGroup: rbac.authorization.k8s.io
+---
+# Deployment der internen Registry
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -27,6 +64,7 @@ spec:
       labels:
         app: internal-registry
     spec:
+      serviceAccountName: registry-sa
       containers:
         - name: registry
           image: registry:2
@@ -35,11 +73,17 @@ spec:
           volumeMounts:
             - name: registry-storage
               mountPath: /var/lib/registry
+          env:
+            - name: REGISTRY_HTTP_SECRET
+              value: "super-secure-secret"
+            - name: REGISTRY_STORAGE_DELETE_ENABLED
+              value: "true" # Ermöglicht das Löschen von Images
       volumes:
         - name: registry-storage
           persistentVolumeClaim:
             claimName: registry-pvc
 ---
+# Service zur Bereitstellung der Registry
 apiVersion: v1
 kind: Service
 metadata:
@@ -47,7 +91,6 @@ metadata:
   namespace: registry
   labels:
     app: internal-registry
-    app.kubernetes.io/instance: registry
 spec:
   type: NodePort
   selector:
@@ -56,4 +99,4 @@ spec:
     - port: 5000
       targetPort: 5000
       protocol: TCP
-      nodePort: 30500 # Wähle einen Port zwischen 30000-32767
+      nodePort: 30500 # Externer Zugriff über diesen Port
